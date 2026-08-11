@@ -1,36 +1,61 @@
 from pathlib import Path
 
-import requests
+import yt_dlp
 
 from ..core.models import MediaItem
 
 
 class MediaDownloader:
-    """Downloads Instagram media files."""
+    """Downloads Instagram media using yt-dlp."""
 
     def __init__(self, download_directory: str | Path = "downloads"):
         self.download_directory = Path(download_directory)
         self.download_directory.mkdir(parents=True, exist_ok=True)
 
-    def download(self, item: MediaItem, filename: str) -> Path:
-        """Download a media item and return the saved file path."""
+    def download(
+        self,
+        item: MediaItem,
+        filename: str | None = None
+    ) -> Path:
+        """Download a single media item."""
 
-        output_path = self.download_directory / filename
+        output_template = self._build_output_template(filename)
 
-        response = requests.get(
-            item.url,
-            stream=True,
-            timeout=30
+        options = {
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "restrictfilenames": True,
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(item.url, download=True)
+
+                downloaded_file = Path(
+                    ydl.prepare_filename(info)
+                )
+
+            item.downloaded = True
+            item.file_path = str(downloaded_file)
+
+            return downloaded_file
+
+        except Exception as error:
+            raise RuntimeError(
+                f"Failed to download {item.url}: {error}"
+            ) from error
+
+    def _build_output_template(
+        self,
+        filename: str | None
+    ) -> str:
+        """Build the yt-dlp output path."""
+
+        if filename:
+            return str(self.download_directory / filename)
+
+        return str(
+            self.download_directory / "%(title)s.%(ext)s"
         )
-
-        response.raise_for_status()
-
-        with output_path.open("wb") as file:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    file.write(chunk)
-
-        item.downloaded = True
-        item.file_path = str(output_path)
-
-        return output_path

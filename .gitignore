@@ -1,25 +1,56 @@
-# Virtual Environment
-.venv/
+# ================================
+# Python
+# ================================
 
-# Python Cache
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 
+# ================================
+# Virtual Environment
+# ================================
+
+.venv/
+venv/
+env/
+
+# ================================
 # Environment Variables
+# ================================
+
 .env
+.env.*
 
-# VS Code
+# ================================
+# IDE / Editor
+# ================================
+
 .vscode/
+.idea/
 
-# Build Files
+# ================================
+# Build / Packaging
+# ================================
+
 build/
 dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
 
-# Logs
-*.log
+# ================================
+# Application Data
+# ================================
 
-# macOS
+downloads/
+data/
+logs/
+
+# ================================
+# OS Files
+# ================================
+
 .DS_Store
-
-# Windows
 Thumbs.db
+desktop.ini

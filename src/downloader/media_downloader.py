@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Callable
 
 import yt_dlp
 
@@ -8,9 +9,15 @@ from ..core.models import MediaItem
 class MediaDownloader:
     """Downloads Instagram media using yt-dlp."""
 
-    def __init__(self, download_directory: str | Path = "downloads"):
+    def __init__(
+        self,
+        download_directory: str | Path = "downloads",
+        progress_callback: Callable[[dict], None] | None = None,
+    ):
         self.download_directory = Path(download_directory)
         self.download_directory.mkdir(parents=True, exist_ok=True)
+
+        self.progress_callback = progress_callback
 
     def download(
         self,
@@ -27,6 +34,7 @@ class MediaDownloader:
             "no_warnings": True,
             "noplaylist": True,
             "restrictfilenames": True,
+            "progress_hooks": [self._progress_hook],
         }
 
         try:
@@ -46,6 +54,12 @@ class MediaDownloader:
             raise RuntimeError(
                 f"Failed to download {item.url}: {error}"
             ) from error
+
+    def _progress_hook(self, data: dict) -> None:
+        """Receive progress information from yt-dlp."""
+
+        if self.progress_callback is not None:
+            self.progress_callback(data)
 
     def _build_output_template(
         self,

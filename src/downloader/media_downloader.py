@@ -56,10 +56,25 @@ class MediaDownloader:
             ) from error
 
     def _progress_hook(self, data: dict) -> None:
-        """Receive progress information from yt-dlp."""
+        """Receive and forward useful progress information."""
 
-        if self.progress_callback is not None:
-            self.progress_callback(data)
+        if self.progress_callback is None:
+            return
+
+        progress = {
+            "status": data.get("status"),
+            "downloaded_bytes": data.get("downloaded_bytes", 0),
+            "total_bytes": (
+                data.get("total_bytes")
+                or data.get("total_bytes_estimate")
+                or 0
+            ),
+            "speed": data.get("speed"),
+            "eta": data.get("eta"),
+            "filename": data.get("filename"),
+        }
+
+        self.progress_callback(progress)
 
     def _build_output_template(
         self,

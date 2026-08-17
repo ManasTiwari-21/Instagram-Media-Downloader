@@ -8,6 +8,7 @@ class MediaItem:
     media_type: str = "unknown"
     downloaded: bool = False
     file_path: Optional[str] = None
+    file_paths: list[str] = field(default_factory=list)
 
 
 @dataclass

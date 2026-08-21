@@ -6,6 +6,7 @@ from threading import Event
 from typing import Callable
 
 from ..core.models import Collection, MediaItem
+from .failure_log import FailureLog
 from .media_downloader import MediaDownloader
 
 
@@ -49,6 +50,7 @@ class CollectionDownloader:
         self.download_directory.mkdir(parents=True, exist_ok=True)
         self.progress_callback = progress_callback
         self.pause_event = pause_event
+        self.failure_log = FailureLog(self.download_directory / "failed_downloads.csv")
 
     def download(
         self,
@@ -126,6 +128,11 @@ class CollectionDownloader:
 
                 result.failed.append(item)
                 result.errors[item.url] = str(error)
+                self.failure_log.record(
+                    item.url,
+                    item.media_type,
+                    self._failure_reason(error),
+                )
 
                 self._send_progress({
                     "type": "item_failed",
@@ -203,6 +210,15 @@ class CollectionDownloader:
         """Treat Instagram links with tracking parameters as the same media."""
 
         return url.split("?", 1)[0].rstrip("/")
+
+    @staticmethod
+    def _failure_reason(error: Exception) -> str:
+        """Extract the underlying reason from a wrapped download error."""
+
+        message = str(error)
+        if message.startswith("Failed to download "):
+            _, _, message = message.partition(": ")
+        return message
 
     def _media_progress(self, progress: dict) -> None:
         """Forward current media download progress."""

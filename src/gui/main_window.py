@@ -1,4 +1,5 @@
 import threading
+import time
 import tkinter as tk
 from os import startfile
 from pathlib import Path
@@ -9,21 +10,45 @@ from ..core.models import Collection
 from ..downloader.collection_downloader import CollectionDownloader, DownloadResult
 
 
+NIGHT = {
+    "BACKGROUND": "#100d24", "PANEL": "#1c1837", "PANEL_ALT": "#28234b",
+    "TEXT": "#f5f2ff", "MUTED": "#b9b4d3", "ACCENT": "#ff719a",
+    "ACCENT_DARK": "#ba466d", "MINT": "#79e5d1", "BLUE": "#65bdf5",
+    "GOLD": "#ffc978", "RED": "#f05b5b", "YELLOW": "#ffd34e",
+    "EDGE": "#4e4676", "TROUGH": "#39325f", "INPUT": "#141128",
+}
+
+DAY = {
+    "BACKGROUND": "#f3edf7", "PANEL": "#ffffff", "PANEL_ALT": "#eae1f1",
+    "TEXT": "#2a2440", "MUTED": "#6f6885", "ACCENT": "#d9487a",
+    "ACCENT_DARK": "#b13a63", "MINT": "#1f9d84", "BLUE": "#2a72b8",
+    "GOLD": "#c97f1f", "RED": "#c84040", "YELLOW": "#b78a18",
+    "EDGE": "#d6cce3", "TROUGH": "#ddd5e7", "INPUT": "#fbf7fe",
+}
+
+THEMES = {"night": NIGHT, "day": DAY}
+
+SCENES = {
+    "night": {
+        "sky": "#100d24", "upper": "#202a66", "mid": "#30245c",
+        "moon": ("#ffcf9e", "#fff1d7"),
+        "stars": (
+            (70, 80, 2, "#f7e5ff"), (150, 145, 3, "#79e5d1"), (310, 70, 2, "#ffc978"),
+            (520, 115, 3, "#f7e5ff"), (710, 60, 2, "#79e5d1"), (850, 205, 2, "#ffc978"),
+        ),
+        "hill_back": "#171434", "hill_front": "#25204a",
+    },
+    "day": {
+        "sky": "#eef4fb", "upper": "#cfe3f5", "mid": "#f8efd9",
+        "moon": ("#f7cf74", "#fff3c9"),
+        "stars": (),
+        "hill_back": "#cfe0ee", "hill_front": "#b5d4e6",
+    },
+}
+
+
 class MainWindow:
     """Desktop UI for selecting and downloading saved Instagram collections."""
-
-    BACKGROUND = "#100d24"
-    PANEL = "#1c1837"
-    PANEL_ALT = "#28234b"
-    TEXT = "#f5f2ff"
-    MUTED = "#b9b4d3"
-    ACCENT = "#ff719a"
-    ACCENT_DARK = "#ba466d"
-    MINT = "#79e5d1"
-    BLUE = "#65bdf5"
-    GOLD = "#ffc978"
-    RED = "#f05b5b"
-    YELLOW = "#ffd34e"
 
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -37,11 +62,71 @@ class MainWindow:
         self.is_downloading = False
         self.last_queue: list[Collection] = []
         self.failed_collections: list[Collection] = []
+        self.theme = "night"
+        self._set_theme_colors()
         self._build_ui()
         self._load_collections()
 
+    def _set_theme_colors(self) -> None:
+        """Apply the active theme palette as instance color attributes."""
+
+        for name, value in THEMES[self.theme].items():
+            setattr(self, name, value)
+
+    def _reconfigure_style(self) -> None:
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure(
+            "Download.Horizontal.TProgressbar",
+            troughcolor=self.TROUGH,
+            background=self.ACCENT,
+            bordercolor=self.TROUGH,
+            lightcolor=self.ACCENT,
+            darkcolor=self.ACCENT,
+        )
+
+    def _toggle_theme(self) -> None:
+        """Switch between the light (day) and dark (night) look."""
+
+        self.theme = "day" if self.theme == "night" else "night"
+        self._set_theme_colors()
+        self._reconfigure_style()
+        self._recolor_tree()
+        self._draw_background()
+        self.theme_button.config(
+            text="Dark Mode" if self.theme == "day" else "Light Mode"
+        )
+
+    def _recolor_tree(self) -> None:
+        """Remap every widget color from the old palette to the new one."""
+
+        mapping = {}
+        for name in NIGHT:
+            mapping[NIGHT[name]] = DAY[name]
+            mapping[DAY[name]] = NIGHT[name]
+        self._recolor_widget(self.root, mapping)
+
+    def _recolor_widget(self, widget, mapping: dict) -> None:
+        for option in (
+            "bg", "fg", "activebackground", "activeforeground",
+            "buttonbackground", "insertbackground", "selectbackground",
+            "selectforeground", "highlightbackground", "highlightcolor",
+            "troughcolor", "disabledforeground", "readonlybackground",
+        ):
+            try:
+                value = widget.cget(option)
+            except tk.TclError:
+                continue
+            if value in mapping:
+                try:
+                    widget.configure(**{option: mapping[value]})
+                except tk.TclError:
+                    pass
+        for child in widget.winfo_children():
+            self._recolor_widget(child, mapping)
+
     def _build_ui(self) -> None:
-        """Create the twilight anime-inspired desktop layout."""
+        """Create the anime-inspired desktop layout."""
 
         self.background = tk.Canvas(
             self.root,
@@ -51,16 +136,7 @@ class MainWindow:
         self.background.pack(fill="both", expand=True)
         self.background.bind("<Configure>", self._draw_background)
 
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure(
-            "Download.Horizontal.TProgressbar",
-            troughcolor="#39325f",
-            background=self.ACCENT,
-            bordercolor="#39325f",
-            lightcolor=self.ACCENT,
-            darkcolor=self.ACCENT,
-        )
+        self._reconfigure_style()
 
         self.content = tk.Frame(self.background, bg=self.BACKGROUND)
         self.content_window = self.background.create_window(
@@ -74,29 +150,31 @@ class MainWindow:
         self._build_controls()
 
     def _draw_background(self, event=None) -> None:
-        """Draw a lightweight original anime-inspired night scene behind the UI."""
+        """Draw a lightweight original anime-inspired scene behind the UI."""
 
         width = self.background.winfo_width()
         height = self.background.winfo_height()
         if hasattr(self, "content_window"):
             self.background.itemconfigure(self.content_window, width=width)
+        scene = SCENES[self.theme]
         self.background.delete("scene")
-        self.background.create_rectangle(0, 0, width, height, fill="#100d24", outline="", tags="scene")
-        self.background.create_rectangle(0, 0, width, height * 0.30, fill="#202a66", outline="", tags="scene")
-        self.background.create_rectangle(0, height * 0.30, width, height * 0.62, fill="#30245c", outline="", tags="scene")
-        self.background.create_oval(width - 260, 28, width - 90, 198, fill="#ffcf9e", outline="", tags="scene")
-        self.background.create_oval(width - 220, 48, width - 100, 168, fill="#fff1d7", outline="", tags="scene")
-        for x, y, size, color in ((70, 80, 2, "#f7e5ff"), (150, 145, 3, "#79e5d1"), (310, 70, 2, "#ffc978"), (520, 115, 3, "#f7e5ff"), (710, 60, 2, "#79e5d1"), (850, 205, 2, "#ffc978")):
+        self.background.create_rectangle(0, 0, width, height, fill=scene["sky"], outline="", tags="scene")
+        self.background.create_rectangle(0, 0, width, height * 0.30, fill=scene["upper"], outline="", tags="scene")
+        self.background.create_rectangle(0, height * 0.30, width, height * 0.62, fill=scene["mid"], outline="", tags="scene")
+        if scene["moon"]:
+            self.background.create_oval(width - 260, 28, width - 90, 198, fill=scene["moon"][0], outline="", tags="scene")
+            self.background.create_oval(width - 220, 48, width - 100, 168, fill=scene["moon"][1], outline="", tags="scene")
+        for x, y, size, color in scene["stars"]:
             self.background.create_oval(x, y, x + size, y + size, fill=color, outline="", tags="scene")
-        self.background.create_polygon(0, height, 0, height - 200, 250, height - 330, 450, height - 170, 680, height - 320, width, height - 180, width, height, fill="#171434", outline="", tags="scene")
-        self.background.create_polygon(0, height, 0, height - 105, 240, height - 185, 420, height - 90, 690, height - 190, width, height - 100, width, height, fill="#25204a", outline="", tags="scene")
+        self.background.create_polygon(0, height, 0, height - 200, 250, height - 330, 450, height - 170, 680, height - 320, width, height - 180, width, height, fill=scene["hill_back"], outline="", tags="scene")
+        self.background.create_polygon(0, height, 0, height - 105, 240, height - 185, 420, height - 90, 690, height - 190, width, height - 100, width, height, fill=scene["hill_front"], outline="", tags="scene")
         self.background.tag_lower("scene")
 
     def _fit_content(self, event=None) -> None:
         self.background.itemconfigure(self.content_window, width=self.background.winfo_width())
 
     def _panel(self, parent) -> tk.Frame:
-        return tk.Frame(parent, bg=self.PANEL, highlightbackground="#4e4676", highlightthickness=1)
+        return tk.Frame(parent, bg=self.PANEL, highlightbackground=self.EDGE, highlightthickness=1)
 
     def _label(self, parent, text, size=10, bold=False, color=None, **kwargs) -> tk.Label:
         return tk.Label(
@@ -118,7 +196,7 @@ class MainWindow:
             command=command,
             bg=color,
             fg=self.TEXT,
-            activebackground=self.ACCENT_DARK if color == self.ACCENT else "#39325f",
+            activebackground=self.ACCENT_DARK if color == self.ACCENT else self.TROUGH,
             activeforeground=self.TEXT,
             relief="flat",
             bd=0,
@@ -132,6 +210,26 @@ class MainWindow:
     def _build_header(self) -> None:
         header = tk.Frame(self.content, bg=self.BACKGROUND)
         header.pack(fill="x", padx=42, pady=(30, 16))
+        header_actions = tk.Frame(header, bg=self.BACKGROUND)
+        header_actions.pack(side="right", anchor="n")
+        self.import_button = self._button(
+            header_actions,
+            "Import New HTML",
+            self._import_html,
+            color=self.BLUE,
+            padx=12,
+            pady=7,
+        )
+        self.import_button.pack(side="right")
+        self.theme_button = self._button(
+            header_actions,
+            "Light Mode",
+            self._toggle_theme,
+            color=self.PANEL_ALT,
+            padx=12,
+            pady=7,
+        )
+        self.theme_button.pack(side="right", padx=(0, 8))
         self._label(header, "INSTAGRAM", 11, True, self.MINT).pack(anchor="w")
         self._label(header, "Archive Studio", 28, True).pack(anchor="w")
         self._label(
@@ -159,7 +257,7 @@ class MainWindow:
             height=8,
             selectmode="extended",
             exportselection=False,
-            bg="#141128",
+            bg=self.INPUT,
             fg=self.TEXT,
             selectbackground=self.ACCENT,
             selectforeground=self.TEXT,
@@ -183,20 +281,6 @@ class MainWindow:
         right.grid(row=0, column=1, sticky="nsew", padx=(10, 18), pady=16)
         self._label(right, "Download Range", 12, True).pack(anchor="w")
         self._label(right, "Items to take from each selected collection.", 9, color=self.MUTED).pack(anchor="w", pady=(2, 12))
-        self.all_collections_var = tk.BooleanVar(value=False)
-        self.all_collections_check = tk.Checkbutton(
-            right,
-            text="Download every collection",
-            variable=self.all_collections_var,
-            command=self._toggle_all_collections,
-            bg=self.PANEL,
-            fg=self.YELLOW,
-            activebackground=self.PANEL,
-            activeforeground=self.YELLOW,
-            selectcolor="#141128",
-            font=("Segoe UI", 10, "bold"),
-        )
-        self.all_collections_check.pack(anchor="w", pady=(0, 8))
         range_row = tk.Frame(right, bg=self.PANEL)
         range_row.pack(anchor="w")
         self._label(range_row, "First", 11).pack(side="left")
@@ -207,7 +291,7 @@ class MainWindow:
             to=99999,
             textvariable=self.limit_var,
             width=7,
-            bg="#141128",
+            bg=self.INPUT,
             fg=self.TEXT,
             buttonbackground=self.PANEL_ALT,
             insertbackground=self.TEXT,
@@ -216,20 +300,6 @@ class MainWindow:
         )
         self.limit_input.pack(side="left", padx=8)
         self._label(range_row, "items", 11).pack(side="left")
-        self.all_items_var = tk.BooleanVar(value=False)
-        self.all_items_check = tk.Checkbutton(
-            right,
-            text="Download all items in each collection",
-            variable=self.all_items_var,
-            command=self._toggle_all_items,
-            bg=self.PANEL,
-            fg=self.GOLD,
-            activebackground=self.PANEL,
-            activeforeground=self.GOLD,
-            selectcolor="#141128",
-            font=("Segoe UI", 10, "bold"),
-        )
-        self.all_items_check.pack(anchor="w", pady=(12, 0))
         self.selection_summary = self._label(right, "No collections selected", 10, color=self.MINT, wraplength=330, justify="left")
         self.selection_summary.pack(anchor="w", pady=(18, 0))
         self._label(right, "Existing URLs are skipped automatically.", 9, color=self.MUTED).pack(anchor="w", pady=(4, 0))
@@ -251,13 +321,17 @@ class MainWindow:
         self.current_progress = ttk.Progressbar(panel, style="Download.Horizontal.TProgressbar", mode="determinate", maximum=100)
         self.current_progress.pack(fill="x", padx=18, pady=(0, 4))
         self.current_details = self._label(panel, "0% | 0 MB / 0 MB", 9, color=self.MUTED)
-        self.current_details.pack(anchor="w", padx=18, pady=(0, 15))
+        self.current_details.pack(anchor="w", padx=18, pady=(0, 4))
+        self.timer_label = self._label(panel, "Elapsed 00:00 | ETA --:--", 9, color=self.MUTED)
+        self.timer_label.pack(anchor="w", padx=18, pady=(0, 15))
 
     def _build_controls(self) -> None:
         controls = tk.Frame(self.content, bg=self.BACKGROUND)
         controls.pack(fill="x", padx=42, pady=(0, 26))
         self.download_button = self._button(controls, "Start Download", self._start_download, color=self.ACCENT, state="disabled")
         self.download_button.pack(side="left")
+        self.whole_collection_button = self._button(controls, "Download Whole Collection", self._download_whole_collection, color=self.GOLD, state="disabled")
+        self.whole_collection_button.pack(side="left", padx=8)
         self.pause_button = self._button(controls, "Pause", self._toggle_pause, color=self.YELLOW, state="disabled")
         self.pause_button.pack(side="left", padx=8)
         self.restart_button = self._button(controls, "Restart Queue", self._restart_queue, state="disabled")
@@ -272,57 +346,70 @@ class MainWindow:
         if not html_file.exists():
             messagebox.showerror("File Not Found", f"Could not find:\n{html_file}")
             return
+        self._load_html_file(html_file)
+
+    def _load_html_file(self, html_file: Path) -> None:
+        """Parse an Instagram export and refresh the collection list."""
         try:
             self.collections = self.manager.load_from_html(html_file)
+            self.collection_list.delete(0, "end")
             for collection in self.collections:
                 self.collection_list.insert("end", f"{collection.name}  ({collection.item_count})")
-            self.status_label.config(text=f"{len(self.collections)} collections loaded. Select one or more to build a queue.")
+            self.current_html_path = html_file
+            self.status_label.config(
+                text=(
+                    f"Loaded {len(self.collections)} collections from "
+                    f"{html_file.name}. Already-downloaded URLs will be skipped."
+                )
+            )
+            self._selection_changed()
         except Exception as error:
             messagebox.showerror("Loading Error", str(error))
+
+    def _import_html(self) -> None:
+        """Let the user pick a newer Instagram HTML export file."""
+        from tkinter import filedialog
+
+        selected_file = filedialog.askopenfilename(
+            title="Choose an Instagram HTML export",
+            filetypes=[
+                ("HTML files", "*.html *.htm"),
+                ("All files", "*.*"),
+            ],
+            initialdir=str(Path("data").resolve()),
+        )
+        if not selected_file:
+            return
+        self._load_html_file(Path(selected_file))
 
     def _selected_collections(self) -> list[Collection]:
         return [self.collections[index] for index in self.collection_list.curselection()]
 
     def _selection_changed(self, event=None) -> None:
         selected = self._selected_collections()
-        if self.all_collections_var.get() and len(selected) != len(self.collections):
-            self.all_collections_var.set(False)
         item_count = sum(collection.item_count for collection in selected)
-        if self.all_items_var.get():
-            range_text = f"all {item_count} item(s)"
-        else:
-            range_text = f"up to {min(item_count, self._current_limit())} item(s) per collection"
-        self.selection_summary.config(text=f"{len(selected)} collection(s), {range_text}")
+        self.selection_summary.config(
+            text=f"{len(selected)} collection(s), {item_count} item(s) available"
+        )
         if not self.is_downloading:
-            self.download_button.config(state="normal" if selected else "disabled")
+            state = "normal" if selected else "disabled"
+            self.download_button.config(state=state)
+            self.whole_collection_button.config(state=state)
 
     def _select_all(self) -> None:
         self.collection_list.selection_set(0, "end")
         self._selection_changed()
 
     def _clear_selection(self) -> None:
-        self.all_collections_var.set(False)
         self.collection_list.selection_clear(0, "end")
         self._selection_changed()
 
     def _invert_selection(self) -> None:
-        self.all_collections_var.set(False)
         selected = set(self.collection_list.curselection())
         self.collection_list.selection_clear(0, "end")
         for index in range(len(self.collections)):
             if index not in selected:
                 self.collection_list.selection_set(index)
-        self._selection_changed()
-
-    def _toggle_all_items(self) -> None:
-        self.limit_input.config(state="disabled" if self.all_items_var.get() else "normal")
-        self._selection_changed()
-
-    def _toggle_all_collections(self) -> None:
-        if self.all_collections_var.get():
-            self.collection_list.selection_set(0, "end")
-        else:
-            self.collection_list.selection_clear(0, "end")
         self._selection_changed()
 
     def _current_limit(self) -> int:
@@ -341,38 +428,59 @@ class MainWindow:
             messagebox.showerror("Invalid Range", "Enter a whole number greater than zero.")
             return None
 
+    def _build_queue(self, selected: list[Collection], limit: int | None) -> list[Collection]:
+        """Build the collection queue using a per-collection item limit."""
+        if limit is None:
+            return [collection for collection in selected if collection.items]
+        queue = [
+            Collection(collection.name, list(collection.items[:limit]))
+            for collection in selected
+        ]
+        return [collection for collection in queue if collection.items]
+
     def _start_download(self) -> None:
         limit = self._download_limit()
         selected = self._selected_collections()
         if limit is None or not selected:
             return
-        queue = [
-            Collection(
-                collection.name,
-                list(collection.items if self.all_items_var.get() else collection.items[:limit]),
-            )
-            for collection in selected
-        ]
-        queue = [collection for collection in queue if collection.items]
+        queue = self._build_queue(selected, limit)
         if not queue:
             messagebox.showinfo("No Media", "The selected collections do not contain media.")
             return
         self.last_queue = queue
         self._begin_download(queue, "Downloading selected collections")
 
+    def _download_whole_collection(self) -> None:
+        """Queue every item in the currently selected collections."""
+        selected = self._selected_collections()
+        if not selected:
+            return
+        queue = self._build_queue(selected, None)
+        if not queue:
+            messagebox.showinfo("No Media", "The selected collections do not contain media.")
+            return
+        self.last_queue = queue
+        self._begin_download(queue, "Downloading whole selected collections")
+
     def _begin_download(self, queue: list[Collection], status: str) -> None:
         self.is_downloading = True
         self.pause_event.clear()
+        self._download_started_at = time.monotonic()
+        self._item_started_at: float | None = None
+        self._item_durations: list[float] = []
+        self._timer_job: str | None = None
+        self.timer_label.config(text="Elapsed 00:00 | ETA --:--")
+        self._tick_timer()
         total = sum(len(collection.items) for collection in queue)
+        self._item_count = total
         self.overall_progress.config(maximum=total, value=0)
         self.current_progress.config(value=0)
         self.overall_status.config(text=f"0 / {total} items")
         self.status_label.config(text=status)
         self.collection_list.config(state="disabled")
         self.limit_input.config(state="disabled")
-        self.all_items_check.config(state="disabled")
-        self.all_collections_check.config(state="disabled")
         self.download_button.config(state="disabled")
+        self.whole_collection_button.config(state="disabled")
         self.pause_button.config(state="normal", text="Pause")
         self.restart_button.config(state="disabled")
         self.retry_button.config(state="disabled")
@@ -383,7 +491,11 @@ class MainWindow:
         offset = 0
         for collection in queue:
             callback = lambda event, offset=offset: self._handle_progress(event, offset, total)
-            downloader = CollectionDownloader("downloads", callback, self.pause_event)
+            downloader = CollectionDownloader(
+                "downloads",
+                callback,
+                self.pause_event,
+            )
             results.append(downloader.download(collection))
             offset += len(collection.items)
         self.root.after(0, self._download_finished, results, total)
@@ -400,6 +512,7 @@ class MainWindow:
         index = event.get("index", 0)
         total = event.get("total", 0)
         if event_type == "item_start":
+            self._item_started_at = time.monotonic()
             self.current_progress.config(value=0)
             self.current_file_label.config(text=f"Downloading {event.get('media_type', 'media')} {index} of {total}")
             self.overall_status.config(text=f"{index - 1} / {total} items")
@@ -420,6 +533,7 @@ class MainWindow:
                 )
             )
         elif event_type in {"item_complete", "item_skipped", "item_failed"}:
+            self._record_item_duration()
             self.overall_progress.config(value=index)
             self.overall_status.config(text=f"{index} / {total} items")
             if event_type == "item_complete":
@@ -430,8 +544,47 @@ class MainWindow:
             else:
                 self.current_file_label.config(text=f"Failed: {event.get('error', 'Unknown error')}")
 
+    def _record_item_duration(self) -> None:
+        if self._item_started_at is not None:
+            self._item_durations.append(time.monotonic() - self._item_started_at)
+            self._item_started_at = None
+
+    def _tick_timer(self) -> None:
+        if not self.is_downloading:
+            return
+        elapsed = time.monotonic() - self._download_started_at
+        eta = self._estimate_eta()
+        self.timer_label.config(
+            text=(
+                f"Elapsed {self._fmt(elapsed)} | "
+                f"ETA {self._fmt(eta) if eta else '--:--'}"
+            )
+        )
+        self._timer_job = self.root.after(1000, self._tick_timer)
+
+    def _estimate_eta(self) -> float | None:
+        if not self._item_durations:
+            return None
+        average = sum(self._item_durations) / len(self._item_durations)
+        remaining = max(self._item_count - len(self._item_durations), 0)
+        return average * remaining
+
+    @staticmethod
+    def _fmt(seconds: float) -> str:
+        seconds = int(seconds)
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
     def _download_finished(self, results: list[DownloadResult], total: int) -> None:
         self.is_downloading = False
+        if self._timer_job:
+            self.root.after_cancel(self._timer_job)
+            self._timer_job = None
+        elapsed = time.monotonic() - self._download_started_at
+        self.timer_label.config(text=f"Finished in {self._fmt(elapsed)}")
         self.failed_collections = [
             Collection(result.collection_name, list(result.failed))
             for result in results
@@ -441,11 +594,11 @@ class MainWindow:
         skipped = sum(result.skipped_count for result in results)
         failed = sum(result.failure_count for result in results)
         self.overall_progress.config(value=total)
-        self.status_label.config(text=f"Complete: {successful} saved | {skipped} duplicates skipped | {failed} failed")
+        summary = f"Complete: {successful} saved | {skipped} duplicates skipped | {failed} failed"
+        if failed:
+            summary += f" | Failures logged to downloads/failed_downloads.csv"
+        self.status_label.config(text=summary)
         self.collection_list.config(state="normal")
-        self.all_items_check.config(state="normal")
-        self.all_collections_check.config(state="normal")
-        self._toggle_all_items()
         self.pause_button.config(state="disabled", text="Pause")
         self.restart_button.config(state="normal" if self.last_queue else "disabled")
         self.retry_button.config(state="normal" if self.failed_collections else "disabled")

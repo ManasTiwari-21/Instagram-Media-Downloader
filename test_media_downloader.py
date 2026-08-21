@@ -68,11 +68,11 @@ class MediaDownloaderTests(unittest.TestCase):
         path = MediaDownloader("downloads").download(item)
 
         self.assertEqual(path, Path("downloads/reel.mp4"))
-        self.assertTrue(FakeYoutubeDL.instances[1].options["noplaylist"])
+        self.assertTrue(FakeYoutubeDL.instances[0].options["noplaylist"])
         self.assertEqual(item.file_paths, [str(Path("downloads/reel.mp4"))])
         self.assertEqual(
-            FakeYoutubeDL.instances[1].options["outtmpl"],
-            "downloads" + "\\%(title)s.%(ext)s",
+            FakeYoutubeDL.instances[0].options["outtmpl"],
+            "downloads" + "\\%(title)s [%(id)s].%(ext)s",
         )
 
     @patch("src.downloader.media_downloader.yt_dlp.YoutubeDL", FakeYoutubeDL)
@@ -88,7 +88,7 @@ class MediaDownloaderTests(unittest.TestCase):
                 collection_directory=root / "Saved",
             ).download(item)
 
-            outtmpl = Path(FakeYoutubeDL.instances[1].options["outtmpl"])
+            outtmpl = Path(FakeYoutubeDL.instances[0].options["outtmpl"])
             self.assertEqual(outtmpl.parent, root / "Saved")
             self.assertFalse((root / "Saved" / "creator").exists())
 
@@ -149,6 +149,44 @@ class MediaDownloaderTests(unittest.TestCase):
 
     def test_windows_device_names_are_not_used_as_path_segments(self):
         self.assertEqual(MediaDownloader._sanitize_path_segment("CON.txt"), "unnamed")
+
+    def test_cookies_file_is_used_when_present(self):
+        self.assertEqual(MediaDownloader._cookies_options(), {})
+
+    @patch("src.downloader.media_downloader.yt_dlp.YoutubeDL", FakeYoutubeDL)
+    def test_reel_failure_raises_clean_wrapped_error_without_retries(self):
+        FakeYoutubeDL.downloaded_files = []
+        FakeYoutubeDL.instances = []
+
+        class FailingYoutubeDL(FakeYoutubeDL):
+            def extract_info(self, url, download):
+                raise RuntimeError("empty media response")
+
+        with patch("src.downloader.media_downloader.yt_dlp.YoutubeDL", FailingYoutubeDL):
+            item = MediaItem("https://www.instagram.com/reel/DV07AU2E2Cc/", "reel")
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"Failed to download https://www\.instagram\.com/reel/DV07AU2E2Cc/",
+            ):
+                MediaDownloader("downloads").download(item)
+
+        self.assertEqual(len(FailingYoutubeDL.instances), 1)
+
+    @patch("src.downloader.media_downloader.yt_dlp.YoutubeDL", FakeYoutubeDL)
+    def test_post_failure_raises_clean_wrapped_error_without_retries(self):
+        class FailingYoutubeDL(FakeYoutubeDL):
+            def extract_info(self, url, download):
+                raise RuntimeError("empty media response")
+
+        with patch("src.downloader.media_downloader.yt_dlp.YoutubeDL", FailingYoutubeDL):
+            item = MediaItem("https://www.instagram.com/p/ABC123/", "post")
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"Failed to download https://www\.instagram\.com/p/ABC123/",
+            ):
+                MediaDownloader("downloads").download(item)
+
+        self.assertEqual(len(FailingYoutubeDL.instances), 1)
 
 
 if __name__ == "__main__":

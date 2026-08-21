@@ -62,7 +62,7 @@ class CollectionWorkflowTests(unittest.TestCase):
     @patch("src.downloader.collection_downloader.MediaDownloader", FakeMediaDownloader)
     def test_failures_are_retryable_and_never_written_to_manifest(self):
         with TemporaryDirectory() as directory:
-            item = MediaItem("will-retry")
+            item = MediaItem("will-retry", "reel")
             FakeMediaDownloader.failures = {item.url}
             downloader = CollectionDownloader(directory)
             failed = downloader.download(Collection("Saved", [item]))
@@ -71,12 +71,38 @@ class CollectionWorkflowTests(unittest.TestCase):
             self.assertEqual(failed.errors[item.url], "temporary failure")
             self.assertFalse((Path(directory) / ".download_manifest.json").exists())
 
+            failure_log = (Path(directory) / "failed_downloads.csv").read_text()
+            self.assertIn("url,media_type,error", failure_log)
+            self.assertIn("will-retry,reel,temporary failure", failure_log)
+
             FakeMediaDownloader.failures = set()
             retried = downloader.retry_failed(failed)
 
             self.assertEqual(retried.success_count, 1)
             self.assertEqual(retried.failure_count, 0)
             self.assertEqual(len(FakeMediaDownloader.calls), 2)
+
+    @patch("src.downloader.collection_downloader.MediaDownloader", FakeMediaDownloader)
+    def test_failures_are_appended_to_the_persistent_log_across_runs(self):
+        with TemporaryDirectory() as directory:
+            downloader = CollectionDownloader(directory)
+            FakeMediaDownloader.failures = {"one", "two"}
+            downloader.download(Collection("Saved", [
+                MediaItem("one", "reel"),
+                MediaItem("two", "post"),
+            ]))
+
+            FakeMediaDownloader.failures = {"one", "three"}
+            downloader.download(Collection("Saved", [
+                MediaItem("one", "reel"),
+                MediaItem("three", "video"),
+            ]))
+
+            rows = (Path(directory) / "failed_downloads.csv").read_text().strip().splitlines()
+            self.assertEqual(rows[0], "url,media_type,error")
+            self.assertIn("one,reel,temporary failure", rows)
+            self.assertIn("two,post,temporary failure", rows)
+            self.assertIn("three,video,temporary failure", rows)
 
     @patch("src.downloader.collection_downloader.MediaDownloader", FakeMediaDownloader)
     def test_pause_event_waits_before_the_next_item(self):

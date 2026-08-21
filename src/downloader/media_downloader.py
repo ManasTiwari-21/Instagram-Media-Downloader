@@ -8,8 +8,24 @@ import yt_dlp
 from ..core.models import MediaItem
 
 
+class _SilentLogger:
+    """Consume yt-dlp messages so retry noise never reaches the console."""
+
+    def debug(self, message: str) -> None:
+        pass
+
+    def info(self, message: str) -> None:
+        pass
+
+    def warning(self, message: str) -> None:
+        pass
+
+    def error(self, message: str) -> None:
+        pass
+
+
 class MediaDownloader:
-    """Downloads Instagram media using yt-dlp."""
+    """Downloads Instagram media without an account or authenticated session."""
 
     def __init__(
         self,
@@ -32,24 +48,28 @@ class MediaDownloader:
     ) -> Path:
         """Download a single media item."""
 
-        info = self._extract_info(item.url)
-        is_post = item.media_type == "post"
-        is_carousel = is_post and bool(info.get("entries"))
-
-        if is_post:
-            target_directory = self._target_directory(info)
-            self._downloaded_files = self._download_post_media(info, target_directory)
-            downloaded_file = (
-                target_directory / self._post_directory_name(info)
-                if is_carousel
-                else self._downloaded_files[0]
-            )
+        if item.media_type == "post":
+            try:
+                info = self._extract_info(item.url)
+                is_carousel = bool(info.get("entries"))
+                target_directory = self._target_directory(info)
+                self._downloaded_files = self._download_post_media(info, target_directory)
+                downloaded_file = (
+                    target_directory / self._post_directory_name(info)
+                    if is_carousel
+                    else self._downloaded_files[0]
+                )
+            except Exception as error:
+                raise RuntimeError(
+                    f"Failed to download {item.url}: {error}"
+                ) from error
             item.downloaded = True
             item.file_path = str(downloaded_file)
             item.file_paths = [str(path) for path in self._downloaded_files]
             return downloaded_file
 
-        # Reels stay flat: a single file directly inside the collection folder.
+        # Reels download directly without a separate metadata request, which
+        # halves the number of Instagram calls and avoids most rate-limit errors.
         target_directory = self.collection_directory or self.download_directory
         output_template = self._build_output_template(
             filename,
@@ -61,37 +81,41 @@ class MediaDownloader:
             "outtmpl": output_template,
             "quiet": True,
             "no_warnings": True,
-            "noplaylist": not is_carousel,
+            "noplaylist": True,
             "restrictfilenames": True,
             "progress_hooks": [self._progress_hook],
+            "logger": _SilentLogger(),
+            **self._cookies_options(),
         }
 
         try:
-            with yt_dlp.YoutubeDL(options) as ydl:
-                ydl.extract_info(item.url, download=True)
+            self._download_via_ytdlp(item.url, options)
 
             if not self._downloaded_files:
                 raise RuntimeError("yt-dlp did not report a downloaded file")
 
-            downloaded_file = (
-                Path(output_template).parent
-                if is_carousel
-                else self._downloaded_files[0]
-            )
-
-            item.downloaded = True
-            item.file_path = str(downloaded_file)
-            item.file_paths = [str(path) for path in self._downloaded_files]
-
-            return downloaded_file
+            downloaded_file = self._downloaded_files[0]
 
         except Exception as error:
             raise RuntimeError(
                 f"Failed to download {item.url}: {error}"
             ) from error
 
+        item.downloaded = True
+        item.file_path = str(downloaded_file)
+        item.file_paths = [str(path) for path in self._downloaded_files]
+
+        return downloaded_file
+
     @staticmethod
-    def _extract_info(url: str) -> dict:
+    def _download_via_ytdlp(url: str, options: dict) -> None:
+        """Run one yt-dlp download against the given options."""
+
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.extract_info(url, download=True)
+
+    @classmethod
+    def _extract_info(cls, url: str) -> dict:
         """Read metadata before deciding whether this is a carousel."""
 
         options = {
@@ -101,10 +125,27 @@ class MediaDownloader:
             # Instagram exposes image posts as thumbnails rather than video
             # formats. Keep that metadata instead of failing the extraction.
             "ignore_no_formats_error": True,
+            "logger": _SilentLogger(),
+            **cls._cookies_options(),
         }
+
+        return cls._extract_with_options(url, options)
+
+    @staticmethod
+    def _extract_with_options(url: str, options: dict) -> dict:
+        """Run one metadata-only extraction against the given options."""
 
         with yt_dlp.YoutubeDL(options) as ydl:
             return ydl.extract_info(url, download=False)
+
+    @staticmethod
+    def _cookies_options() -> dict:
+        """Use a cookies.txt file if the user provided one to avoid login walls."""
+
+        for candidate in (Path("cookies.txt"), Path("data/cookies.txt")):
+            if candidate.exists():
+                return {"cookies": str(candidate)}
+        return {}
 
     def _download_post_media(
         self,
@@ -247,8 +288,10 @@ class MediaDownloader:
         if filename:
             return str(download_directory / filename)
 
+        # The shortcode suffix keeps reels from the same account unique; without
+        # it yt-dlp silently overwrites the earlier file when titles collide.
         return str(
-            download_directory / "%(title)s.%(ext)s"
+            download_directory / "%(title)s [%(id)s].%(ext)s"
         )
 
     def _target_directory(self, info: dict) -> Path:
